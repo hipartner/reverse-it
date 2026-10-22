@@ -16,8 +16,6 @@ import * as walk from "acorn-walk";
 import type {
   IpcChannel,
   BrowserWindowInfo,
-  ElectronAnalysis,
-  Evidence,
 } from "../../domain/common/types.js";
 
 /** Extract Electron IPC channels and BrowserWindow configurations from source. */
@@ -101,7 +99,6 @@ export function extractElectronDetails(
         ) {
           let preloadScript: string | undefined;
 
-          // Search options argument for webPreferences.preload
           const optionsArg = node.arguments[0];
           if (optionsArg && optionsArg.type === "ObjectExpression") {
             for (const prop of (optionsArg as acorn.ObjectExpression).properties) {
@@ -139,8 +136,6 @@ export function extractElectronDetails(
       },
     });
   } catch {
-    // If AST parsing fails (e.g. non-standard syntax or bundle chunks),
-    // fallback to regex extraction for IPC channels
     const ipcRegex = /(?:ipcRenderer|ipcMain)\.(send|invoke|on|handle)\s*\(\s*['"`]([^'"`]+)['"`]/g;
     let match: RegExpExecArray | null;
     while ((match = ipcRegex.exec(source)) !== null) {

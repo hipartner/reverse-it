@@ -55,6 +55,15 @@ export async function runMcpServer() {
           },
         },
         {
+          name: "inspect_sourcemap",
+          description: "Inspect external or inline source maps to recover unminified source code.",
+          inputSchema: {
+            type: "object",
+            properties: { filePath: { type: "string", description: "Path to .js or .map file." } },
+            required: ["filePath"],
+          },
+        },
+        {
           name: "inspect_package",
           description:
             "Inspect application package or installer (.deb, .rpm, .pkg, .msi, NSIS/Inno .exe installers, macOS .app bundles, PyInstaller).",
@@ -198,6 +207,8 @@ export async function runMcpServer() {
             maxFiles: args?.maxFiles ? Number(args.maxFiles) : undefined,
           })
         );
+      case "inspect_sourcemap":
+        return formatMcpResult(await analyzeSourceMap(filePath));
       case "inspect_package":
         return formatMcpResult(await analyzePackage(targetPath));
       case "decompile_target":

@@ -16,9 +16,7 @@ import * as path from "node:path";
 import { parseJavaScriptFile } from "../parser/javascript-parser.js";
 import type {
   ModuleInfo,
-  ImportRelationship,
   FileIdentity,
-  Evidence,
 } from "../../domain/common/types.js";
 
 export interface ScanOptions {
@@ -117,7 +115,6 @@ export async function buildModuleGraph(
           evidence: parseRes.value.evidence,
         });
       } else {
-        // Fallback info for files with parse errors (e.g. minified chunks)
         modules.push({
           identity,
           kind: "unknown",

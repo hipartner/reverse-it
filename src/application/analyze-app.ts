@@ -15,7 +15,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { collectSourceFiles, buildModuleGraph } from "../analysis/module-graph/graph-builder.js";
 import { extractElectronDetails } from "../analysis/ipc/electron-ipc.js";
-import { analyzeSourceMap } from "../analysis/sourcemap/sourcemap-analyzer.js";
 import type {
   ApplicationAnalysis,
   FrameworkDetection,

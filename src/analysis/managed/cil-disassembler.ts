@@ -80,11 +80,11 @@ export function disassembleCilBytecode(buffer: Buffer): CilInstruction[] {
 
     if (op) {
       let operandStr: string | undefined;
-      if (op.bandSize === 1 && offset < buffer.length) {
+      if (op.operandSize === 1 && offset < buffer.length) {
         const val = buffer.readInt8(offset);
         operandStr = `0x${val.toString(16)}`;
         offset += 1;
-      } else if (op.bandSize === 4 && offset + 4 <= buffer.length) {
+      } else if (op.operandSize === 4 && offset + 4 <= buffer.length) {
         const val = buffer.readUInt32LE(offset);
         operandStr = `0x${val.toString(16)}`;
         offset += 4;

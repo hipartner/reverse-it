@@ -98,6 +98,32 @@ program
     console.log(result.value.pseudocode);
   });
 
+// Command: inspect-unity
+program
+  .command("inspect-unity <file>")
+  .description("Inspect Unity global-metadata.dat (IL2CPP) method and type tables")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeUnityMetadata(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: UNITY IL2CPP METADATA ==="));
+    console.log(`Version: ${result.value.version} | Types: ${result.value.typeDefinitionsCount} | Methods: ${result.value.methodDefinitionsCount}`);
+  });
+
+// Command: inspect-pck
+program
+  .command("inspect-pck <file>")
+  .description("Inspect Godot Engine .pck package archive")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeGodotPck(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: GODOT PCK ==="));
+    console.log(`Format: ${result.value.formatVersion} | Engine: ${result.value.engineVersion}`);
+  });
+
 // All commands: analyze, inspect-native, disassemble, strings, inspect-apk, inspect-manifest, inspect-firmware, inspect-wasm, inspect-evm, inspect-model, inspect-dotnet, inspect-har, inspect-crash, sourcemap, mcp
 program
   .command("analyze <path>")
