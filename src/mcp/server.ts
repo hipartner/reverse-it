@@ -21,27 +21,21 @@ import { analyzeApplication } from "../application/analyze-app.js";
 import { analyzeSourceMap } from "../analysis/sourcemap/sourcemap-analyzer.js";
 import { analyzeModelArtifact } from "../analysis/models/model-analyzer.js";
 import { analyzeDotNetAssembly } from "../analysis/managed/dotnet-analyzer.js";
-import { analyzeUnityMetadata } from "../analysis/managed/unity-il2cpp.js";
-import { analyzeGodotPck } from "../analysis/managed/godot-pck.js";
 import { analyzeNativeBinary } from "../analysis/native/binary-format.js";
 import { disassembleTarget } from "../analysis/native/disassembly-bridge.js";
+import { decompileTarget } from "../analysis/native/decompiler-bridge.js";
 import { extractBinaryStrings } from "../analysis/native/strings-analyzer.js";
 import { analyzeApk } from "../analysis/mobile/apk-analyzer.js";
 import { analyzeFirmware } from "../analysis/firmware/firmware-analyzer.js";
 import { analyzeHarCapture } from "../analysis/network/har-analyzer.js";
 import { analyzeCoreDump } from "../analysis/diagnostics/crash-analyzer.js";
+import { analyzeWasmModule } from "../analysis/wasm/wasm-analyzer.js";
+import { analyzeEvmBytecode } from "../analysis/evm/evm-analyzer.js";
 
 export async function runMcpServer() {
   const server = new Server(
-    {
-      name: "io.github.hipartner/reverse-it",
-      version: "1.0.0",
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
-    }
+    { name: "io.github.hipartner/reverse-it", version: "1.0.0" },
+    { capabilities: { tools: {} } }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -49,136 +43,130 @@ export async function runMcpServer() {
       tools: [
         {
           name: "analyze_javascript_application",
-          description:
-            "Reverse engineer a JavaScript, Electron, or web application directory. Returns module dependencies, imports, exports, IPC channels, and framework evidence.",
+          description: "Reverse engineer a JavaScript, Electron, or web application directory.",
           inputSchema: {
             type: "object",
             properties: {
-              targetPath: { type: "string", description: "Absolute path to the extracted application directory." },
-              maxFiles: { type: "number", description: "Maximum number of files to inspect (default: 2000)." },
+              targetPath: { type: "string", description: "Path to app directory." },
+              maxFiles: { type: "number", description: "Max files to inspect." },
             },
             required: ["targetPath"],
           },
         },
         {
-          name: "inspect_sourcemap",
-          description:
-            "Inspect an external or inline source map for a JavaScript file to recover original source paths and source code.",
+          name: "decompile_target",
+          description: "Decompile binary routine into C pseudocode using Ghidra or Rizin.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: { type: "string", description: "Absolute path to the JavaScript file or .map file." },
-            },
-            required: ["filePath"],
-          },
-        },
-        {
-          name: "inspect_model_artifact",
-          description:
-            "Inspect an AI model artifact (GGUF or Safetensors) without loading weights into RAM.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the model file." },
-            },
-            required: ["filePath"],
-          },
-        },
-        {
-          name: "inspect_managed_artifact",
-          description:
-            "Inspect a .NET assembly (.dll / .exe) for CLI headers, target framework version, and metadata streams.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the .NET PE assembly." },
+              filePath: { type: "string", description: "Path to binary executable." },
+              functionName: { type: "string", description: "Target function routine." },
             },
             required: ["filePath"],
           },
         },
         {
           name: "inspect_native_binary",
-          description:
-            "Inspect ELF, Mach-O, or PE native binary anatomy, architecture, bitness, entry point, and section map.",
+          description: "Inspect ELF, Mach-O, or PE binary headers, architecture, and section table.",
           inputSchema: {
             type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the binary executable or shared library." },
-            },
+            properties: { filePath: { type: "string", description: "Path to binary." } },
             required: ["filePath"],
           },
         },
         {
           name: "disassemble_target",
-          description:
-            "Disassemble specified function routines or address ranges using host objdump without executing the binary.",
+          description: "Disassemble function instructions via host objdump without execution.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: { type: "string", description: "Absolute path to the native binary." },
-              functionName: { type: "string", description: "Specific symbol or function to disassemble." },
+              filePath: { type: "string", description: "Path to binary." },
+              functionName: { type: "string", description: "Function to disassemble." },
             },
             required: ["filePath"],
           },
         },
         {
           name: "extract_binary_strings",
-          description:
-            "Extract and classify printable ASCII/UTF-8 strings (URLs, file paths, IPs, GUIDs) from any binary.",
+          description: "Extract and classify URLs, IPs, file paths, and GUIDs from any binary.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: { type: "string", description: "Absolute path to the target binary." },
-              minLength: { type: "number", description: "Minimum string length (default: 4)." },
+              filePath: { type: "string", description: "Path to binary." },
+              minLength: { type: "number", description: "Min length." },
             },
             required: ["filePath"],
           },
         },
         {
-          name: "analyze_apk",
-          description:
-            "Inspect an Android APK package for Dex bytecode files, native libraries per ABI, and AndroidManifest.",
+          name: "inspect_model_artifact",
+          description: "Inspect GGUF or Safetensors model metadata without loading weights into RAM.",
           inputSchema: {
             type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the .apk file." },
-            },
+            properties: { filePath: { type: "string", description: "Path to model." } },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "inspect_managed_artifact",
+          description: "Inspect .NET PE/CLI Assembly headers and target framework runtime.",
+          inputSchema: {
+            type: "object",
+            properties: { filePath: { type: "string", description: "Path to .dll / .exe." } },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "inspect_wasm_module",
+          description: "Inspect WebAssembly (.wasm) sections, imports, exports, and functions.",
+          inputSchema: {
+            type: "object",
+            properties: { filePath: { type: "string", description: "Path to .wasm file." } },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "inspect_evm_bytecode",
+          description: "Recover 4-byte function dispatch selectors and ERC standards from EVM bytecode.",
+          inputSchema: {
+            type: "object",
+            properties: { bytecodeHex: { type: "string", description: "Runtime hex bytecode." } },
+            required: ["bytecodeHex"],
+          },
+        },
+        {
+          name: "analyze_apk",
+          description: "Inspect Android APK for Dex files, native ABIs, and manifest.",
+          inputSchema: {
+            type: "object",
+            properties: { filePath: { type: "string", description: "Path to .apk." } },
             required: ["filePath"],
           },
         },
         {
           name: "analyze_firmware",
-          description:
-            "Scan a firmware binary image for partitions (SquashFS, U-Boot, DeviceTree, compressed archives).",
+          description: "Scan firmware image for SquashFS, U-Boot, DeviceTree, and XZ partitions.",
           inputSchema: {
             type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the firmware binary image." },
-            },
+            properties: { filePath: { type: "string", description: "Path to firmware." } },
             required: ["filePath"],
           },
         },
         {
           name: "analyze_har_capture",
-          description:
-            "Inspect an HTTP Archive (.har) capture for requests, responses, authorization headers, and API domains.",
+          description: "Inspect HTTP Archive (.har) capture for endpoints and auth headers.",
           inputSchema: {
             type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the .har file." },
-            },
+            properties: { filePath: { type: "string", description: "Path to .har." } },
             required: ["filePath"],
           },
         },
         {
           name: "analyze_core_dump",
-          description:
-            "Inspect a Linux ELF core dump for architecture, signal numbers, and memory segments.",
+          description: "Inspect Linux ELF core dump for architecture and memory segments.",
           inputSchema: {
             type: "object",
-            properties: {
-              filePath: { type: "string", description: "Absolute path to the core dump file." },
-            },
+            properties: { filePath: { type: "string", description: "Path to core dump." } },
             required: ["filePath"],
           },
         },
@@ -198,12 +186,12 @@ export async function runMcpServer() {
             maxFiles: args?.maxFiles ? Number(args.maxFiles) : undefined,
           })
         );
-      case "inspect_sourcemap":
-        return formatMcpResult(await analyzeSourceMap(filePath));
-      case "inspect_model_artifact":
-        return formatMcpResult(await analyzeModelArtifact(filePath));
-      case "inspect_managed_artifact":
-        return formatMcpResult(await analyzeDotNetAssembly(filePath));
+      case "decompile_target":
+        return formatMcpResult(
+          await decompileTarget(filePath, {
+            functionName: args?.functionName ? String(args.functionName) : undefined,
+          })
+        );
       case "inspect_native_binary":
         return formatMcpResult(await analyzeNativeBinary(filePath));
       case "disassemble_target":
@@ -218,6 +206,14 @@ export async function runMcpServer() {
             minLength: args?.minLength ? Number(args.minLength) : undefined,
           })
         );
+      case "inspect_model_artifact":
+        return formatMcpResult(await analyzeModelArtifact(filePath));
+      case "inspect_managed_artifact":
+        return formatMcpResult(await analyzeDotNetAssembly(filePath));
+      case "inspect_wasm_module":
+        return formatMcpResult(await analyzeWasmModule(filePath));
+      case "inspect_evm_bytecode":
+        return formatMcpResult(analyzeEvmBytecode(String(args?.bytecodeHex)));
       case "analyze_apk":
         return formatMcpResult(await analyzeApk(filePath));
       case "analyze_firmware":
