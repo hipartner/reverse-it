@@ -19,6 +19,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { analyzeApplication } from "../application/analyze-app.js";
 import { analyzeSourceMap } from "../analysis/sourcemap/sourcemap-analyzer.js";
+import { analyzeModelArtifact } from "../analysis/models/model-analyzer.js";
+import { analyzeDotNetAssembly } from "../analysis/managed/dotnet-analyzer.js";
+import { analyzeUnityMetadata } from "../analysis/managed/unity-il2cpp.js";
+import { analyzeGodotPck } from "../analysis/managed/godot-pck.js";
 
 export async function runMcpServer() {
   const server = new Server(
@@ -33,7 +37,6 @@ export async function runMcpServer() {
     }
   );
 
-  // List available tools
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [
@@ -71,65 +74,98 @@ export async function runMcpServer() {
             required: ["filePath"],
           },
         },
+        {
+          name: "inspect_model_artifact",
+          description:
+            "Inspect an AI model artifact (GGUF or Safetensors). Returns tensor counts, quantization, architecture, context length, and metadata without loading weights into RAM.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: {
+                type: "string",
+                description: "Absolute path to the .gguf or .safetensors model file.",
+              },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "inspect_managed_artifact",
+          description:
+            "Inspect a .NET assembly (.dll / .exe) for CLI headers, target framework version, flags, and metadata streams without executing code.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: {
+                type: "string",
+                description: "Absolute path to the .NET PE assembly file.",
+              },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "inspect_game_metadata",
+          description:
+            "Inspect game engine metadata: Unity global-metadata.dat (IL2CPP) or Godot .pck packages.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: {
+                type: "string",
+                description: "Absolute path to global-metadata.dat or .pck file.",
+              },
+              engine: {
+                type: "string",
+                enum: ["unity", "godot"],
+                description: "Game engine format to parse.",
+              },
+            },
+            required: ["filePath", "engine"],
+          },
+        },
       ],
     };
   });
 
-  // Handle tool calls
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     if (name === "analyze_javascript_application") {
       const targetPath = String(args?.targetPath);
       const maxFiles = args?.maxFiles ? Number(args.maxFiles) : undefined;
-
       const result = await analyzeApplication({ targetPath, maxFiles });
-
-      if (result.ok) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result.value, null, 2),
-            },
-          ],
-        };
-      } else {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Analysis failed: ${result.error.message}`,
-            },
-          ],
-        };
-      }
+      return formatMcpResult(result);
     }
 
     if (name === "inspect_sourcemap") {
       const filePath = String(args?.filePath);
       const result = await analyzeSourceMap(filePath);
+      return formatMcpResult(result);
+    }
 
-      if (result.ok) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result.value, null, 2),
-            },
-          ],
-        };
-      } else {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Source map inspection failed: ${result.error.message}`,
-            },
-          ],
-        };
+    if (name === "inspect_model_artifact") {
+      const filePath = String(args?.filePath);
+      const result = await analyzeModelArtifact(filePath);
+      return formatMcpResult(result);
+    }
+
+    if (name === "inspect_managed_artifact") {
+      const filePath = String(args?.filePath);
+      const result = await analyzeDotNetAssembly(filePath);
+      return formatMcpResult(result);
+    }
+
+    if (name === "inspect_game_metadata") {
+      const filePath = String(args?.filePath);
+      const engine = String(args?.engine);
+
+      if (engine === "unity") {
+        const result = await analyzeUnityMetadata(filePath);
+        return formatMcpResult(result);
+      } else if (engine === "godot") {
+        const result = await analyzeGodotPck(filePath);
+        return formatMcpResult(result);
       }
     }
 
@@ -140,7 +176,29 @@ export async function runMcpServer() {
   await server.connect(transport);
 }
 
-// Start if executed directly
+function formatMcpResult(result: { ok: boolean; value?: unknown; error?: { message: string } }) {
+  if (result.ok) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(result.value, null, 2),
+        },
+      ],
+    };
+  } else {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text" as const,
+          text: `Operation failed: ${result.error?.message ?? "Unknown error"}`,
+        },
+      ],
+    };
+  }
+}
+
 if (process.argv[1]?.endsWith("server.ts") || process.argv[1]?.endsWith("server.js")) {
   runMcpServer().catch((err) => {
     console.error("Failed to start MCP server:", err);

@@ -16,6 +16,10 @@ import chalk from "chalk";
 import ora from "ora";
 import { analyzeApplication } from "../application/analyze-app.js";
 import { analyzeSourceMap } from "../analysis/sourcemap/sourcemap-analyzer.js";
+import { analyzeModelArtifact } from "../analysis/models/model-analyzer.js";
+import { analyzeDotNetAssembly } from "../analysis/managed/dotnet-analyzer.js";
+import { analyzeUnityMetadata } from "../analysis/managed/unity-il2cpp.js";
+import { analyzeGodotPck } from "../analysis/managed/godot-pck.js";
 import { runMcpServer } from "../mcp/server.js";
 
 const program = new Command();
@@ -24,7 +28,7 @@ program
   .name("ri")
   .description(
     chalk.cyan(
-      "Reverse IT — Advanced static reverse-engineering for JavaScript, Electron & Web applications"
+      "Reverse IT — Advanced static reverse-engineering for JavaScript, Electron, .NET, AI Models & Game Assets"
     )
   )
   .version("1.0.0");
@@ -58,7 +62,7 @@ program
 
     const app = result.value;
     console.log();
-    console.log(chalk.bold.cyan("=== REVERSE IT: ANALYSIS SUMMARY ==="));
+    console.log(chalk.bold.cyan("=== REVERSE IT: APPLICATION SUMMARY ==="));
     console.log(chalk.white(`Target Path      : `) + chalk.yellow(app.targetPath));
     console.log(chalk.white(`Total Modules    : `) + chalk.green(app.analyzedFiles));
     console.log(chalk.white(`Source Maps      : `) + chalk.green(app.sourceMapCount));
@@ -82,14 +86,8 @@ program
         for (const channel of app.electron.ipcChannels.slice(0, 10)) {
           console.log(`  • ${chalk.cyan(channel.name)} [${channel.direction}] (via ${channel.handler})`);
         }
-        if (app.electron.ipcChannels.length > 10) {
-          console.log(chalk.gray(`  ... and ${app.electron.ipcChannels.length - 10} more channels`));
-        }
       }
     }
-
-    console.log();
-    console.log(chalk.gray("Evidence recorded. Use --json to export complete machine evidence."));
   });
 
 // Command: sourcemap
@@ -99,25 +97,116 @@ program
   .option("--json", "Output raw JSON evidence")
   .action(async (file: string, options: { json?: boolean }) => {
     const result = await analyzeSourceMap(file);
-
     if (!result.ok) {
       console.error(chalk.red(`Source map analysis failed: ${result.error.message}`));
       process.exit(1);
     }
-
     if (options.json) {
       console.log(JSON.stringify(result.value, null, 2));
       return;
     }
-
     const sm = result.value;
     console.log(chalk.bold.cyan("=== REVERSE IT: SOURCE MAP RECOVERY ==="));
     console.log(`Target           : ${sm.targetFilePath}`);
     console.log(`Recovered Files  : ${sm.originalSourcesCount}`);
-    console.log();
     for (const src of sm.sources.slice(0, 15)) {
       console.log(`  • ${chalk.green(src.originalPath)} ${src.hasContent ? chalk.gray(`(${src.sizeBytes ?? 0} bytes)`) : chalk.red("(no embedded content)")}`);
     }
+  });
+
+// Command: inspect-model
+program
+  .command("inspect-model <file>")
+  .description("Inspect AI model artifact (GGUF / Safetensors) metadata and tensors")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeModelArtifact(file);
+    if (!result.ok) {
+      console.error(chalk.red(`Model inspection failed: ${result.error.message}`));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const m = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: MODEL ARTIFACT ==="));
+    console.log(chalk.white("Format       : ") + chalk.yellow(m.format.toUpperCase()));
+    console.log(chalk.white("Tensors      : ") + chalk.green(m.tensorCount));
+    if (m.architecture) console.log(chalk.white("Architecture : ") + chalk.cyan(m.architecture));
+    if (m.quantization) console.log(chalk.white("Quantization : ") + chalk.magenta(m.quantization));
+    if (m.contextLength) console.log(chalk.white("Context Len  : ") + chalk.green(m.contextLength));
+  });
+
+// Command: inspect-dotnet
+program
+  .command("inspect-dotnet <file>")
+  .description("Inspect .NET PE Assembly for CIL headers and target framework")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeDotNetAssembly(file);
+    if (!result.ok) {
+      console.error(chalk.red(`DotNet inspection failed: ${result.error.message}`));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const d = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: .NET ASSEMBLY ==="));
+    console.log(chalk.white("Managed CIL  : ") + (d.isManagedAssembly ? chalk.green("YES") : chalk.red("NO (Native PE)")));
+    console.log(chalk.white("Machine      : ") + chalk.yellow(d.peMachine));
+    if (d.targetFrameworkVersion) {
+      console.log(chalk.white("Framework    : ") + chalk.cyan(d.targetFrameworkVersion));
+    }
+    if (d.cliHeader) {
+      console.log(chalk.white("IL Only      : ") + (d.cliHeader.isIlOnly ? chalk.green("true") : chalk.gray("false")));
+      console.log(chalk.white("Entry Token  : ") + chalk.yellow(d.cliHeader.entryPointToken));
+    }
+  });
+
+// Command: inspect-unity
+program
+  .command("inspect-unity <file>")
+  .description("Inspect Unity global-metadata.dat (IL2CPP) method and type tables")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeUnityMetadata(file);
+    if (!result.ok) {
+      console.error(chalk.red(`Unity metadata inspection failed: ${result.error.message}`));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const u = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: UNITY IL2CPP METADATA ==="));
+    console.log(chalk.white("Metadata Ver : ") + chalk.yellow(u.version));
+    console.log(chalk.white("Types Count  : ") + chalk.green(u.typeDefinitionsCount));
+    console.log(chalk.white("Methods Count: ") + chalk.green(u.methodDefinitionsCount));
+  });
+
+// Command: inspect-pck
+program
+  .command("inspect-pck <file>")
+  .description("Inspect Godot Engine .pck package archive")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeGodotPck(file);
+    if (!result.ok) {
+      console.error(chalk.red(`Godot PCK inspection failed: ${result.error.message}`));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const g = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: GODOT PCK ==="));
+    console.log(chalk.white("Format Ver   : ") + chalk.yellow(g.formatVersion));
+    console.log(chalk.white("Engine Ver   : ") + chalk.cyan(g.engineVersion));
   });
 
 // Command: mcp
