@@ -27,6 +27,7 @@ import { decompileTarget } from "../analysis/native/decompiler-bridge.js";
 import { extractBinaryStrings } from "../analysis/native/strings-analyzer.js";
 import { analyzeApk } from "../analysis/mobile/apk-analyzer.js";
 import { decodeBinaryManifest } from "../analysis/mobile/manifest-decoder.js";
+import { analyzePackage } from "../analysis/packages/package-analyzer.js";
 import { analyzeFirmware } from "../analysis/firmware/firmware-analyzer.js";
 import { analyzeHarCapture } from "../analysis/network/har-analyzer.js";
 import { analyzeCoreDump } from "../analysis/diagnostics/crash-analyzer.js";
@@ -40,12 +41,42 @@ program
   .name("ri")
   .description(
     chalk.cyan(
-      "Reverse IT — Advanced multi-domain reverse-engineering CLI & MCP server"
+      "Reverse IT — Universal multi-domain reverse-engineering CLI & MCP server"
     )
   )
   .version("1.0.0");
 
-// Command: decompile (Ghidra, Rizin, IDA)
+// Command: inspect-package (.deb, .rpm, .pkg, .msi, NSIS/Inno .exe, macOS .app)
+program
+  .command("inspect-package <target>")
+  .description("Inspect application installer or package (.deb, .rpm, .pkg, .msi, NSIS/Inno .exe, macOS .app)")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (target: string, options: { json?: boolean }) => {
+    const spinner = options.json ? null : ora(`Inspecting package: ${chalk.bold(target)}...`).start();
+    const result = await analyzePackage(target);
+    if (!result.ok) {
+      if (spinner) spinner.fail(chalk.red(result.error.message));
+      else console.error(JSON.stringify(result.error, null, 2));
+      process.exit(1);
+    }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    spinner?.succeed(chalk.green("Package parsed successfully!"));
+    const p = result.value;
+    console.log();
+    console.log(chalk.bold.cyan("=== REVERSE IT: APPLICATION PACKAGE ==="));
+    console.log(`Package Type : ${chalk.yellow(p.packageType.toUpperCase())}`);
+    if (p.packageName) console.log(`Name         : ${chalk.green(p.packageName)}`);
+    if (p.installerType) console.log(`Installer    : ${chalk.magenta(p.installerType)}`);
+    if (p.version) console.log(`Version      : ${chalk.cyan(p.version)}`);
+    if (p.entries.length > 0) {
+      console.log(`\nDiscovered Contained Archives / Files (${p.entries.length}):`);
+      for (const entry of p.entries.slice(0, 15)) {
+        console.log(`  • ${chalk.white(entry.name)} ${entry.sizeBytes > 0 ? chalk.gray(`(${entry.sizeBytes} bytes)`) : ""}`);
+      }
+    }
+  });
+
+// Command: decompile
 program
   .command("decompile <file>")
   .description("Decompile binary routine into C pseudocode using Ghidra or Rizin")
@@ -54,104 +85,35 @@ program
   .option("--json", "Output raw JSON evidence")
   .action(async (file: string, options: { function?: string; provider?: string; json?: boolean }) => {
     const spinner = options.json ? null : ora(`Decompiling ${chalk.bold(file)}...`).start();
-    const result = await decompileTarget(file, {
-      functionName: options.function,
-      provider: options.provider as any,
-    });
+    const result = await decompileTarget(file, { functionName: options.function, provider: options.provider as any });
     if (!result.ok) {
       if (spinner) spinner.fail(chalk.red(result.error.message));
       else console.error(JSON.stringify(result.error, null, 2));
       process.exit(1);
     }
-    if (options.json) {
-      console.log(JSON.stringify(result.value, null, 2));
-      return;
-    }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
     spinner?.succeed(chalk.green(`Decompilation completed via ${result.value.providerUsed}!`));
     console.log();
     console.log(chalk.bold.cyan("=== REVERSE IT: PSEUDOCODE ==="));
     console.log(result.value.pseudocode);
   });
 
-// Command: inspect-wasm
-program
-  .command("inspect-wasm <file>")
-  .description("Inspect WebAssembly (.wasm) sections, imports, and exports")
-  .option("--json", "Output raw JSON evidence")
-  .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeWasmModule(file);
-    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
-    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
-    const w = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: WEBASSEMBLY (WASM) ==="));
-    console.log(`Version  : ${w.version} | Sections: ${w.sections.length} | Exports: ${w.exports.length}`);
-    for (const exp of w.exports.slice(0, 15)) {
-      console.log(`  • ${chalk.green(exp.name)} [${exp.kind}] (index ${exp.index})`);
-    }
-  });
-
-// Command: inspect-evm
-program
-  .command("inspect-evm <bytecode>")
-  .description("Recover 4-byte function dispatch selectors from EVM runtime bytecode")
-  .option("--json", "Output raw JSON evidence")
-  .action((bytecode: string, options: { json?: boolean }) => {
-    const result = analyzeEvmBytecode(bytecode);
-    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
-    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
-    const e = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: EVM BYTECODE DISPATCH ==="));
-    console.log(`Discovered Selectors: ${chalk.green(e.totalSelectors)}`);
-    if (e.detectedStandards.length > 0) {
-      console.log(`Standards Detected  : ${chalk.yellow(e.detectedStandards.join(", "))}`);
-    }
-    for (const s of e.selectors) {
-      console.log(`  • ${chalk.cyan(s.selector)} at offset ${s.byteOffset} ${s.standardMatch ? chalk.yellow(`[${s.standardMatch}]`) : ""}`);
-    }
-  });
-
-// Command: inspect-manifest
-program
-  .command("inspect-manifest <axmlFile>")
-  .description("Decode binary AndroidManifest.xml string pool (permissions, activities)")
-  .option("--json", "Output raw JSON evidence")
-  .action(async (axmlFile: string, options: { json?: boolean }) => {
-    const buf = await fs.readFile(axmlFile);
-    const result = decodeBinaryManifest(buf);
-    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
-    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
-    const m = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: DECODED MANIFEST ==="));
-    if (m.packageName) console.log(`Package: ${chalk.yellow(m.packageName)}`);
-    console.log(`Permissions: ${m.permissions.length} | Activities: ${m.activities.length}`);
-    for (const p of m.permissions) {
-      console.log(`  • ${chalk.green(p)}`);
-    }
-  });
-
-// Core commands: analyze, inspect-native, disassemble, strings, inspect-apk, inspect-firmware, inspect-har, inspect-crash, inspect-model, inspect-dotnet, inspect-unity, inspect-pck, sourcemap, mcp
+// All commands: analyze, inspect-native, disassemble, strings, inspect-apk, inspect-manifest, inspect-firmware, inspect-wasm, inspect-evm, inspect-model, inspect-dotnet, inspect-har, inspect-crash, sourcemap, mcp
 program
   .command("analyze <path>")
   .description("Analyze an extracted JavaScript, Electron, or web application directory")
   .option("--json", "Output raw JSON evidence")
-  .option("--max-files <number>", "Max number of files to inspect", "2000")
-  .action(async (targetPath: string, options: { json?: boolean; maxFiles: string }) => {
-    const spinner = options.json ? null : ora(`Analyzing ${chalk.bold(targetPath)}...`).start();
-    const result = await analyzeApplication({ targetPath, maxFiles: parseInt(options.maxFiles, 10) });
-    if (!result.ok) {
-      if (spinner) spinner.fail(chalk.red(result.error.message));
-      else console.error(JSON.stringify(result.error, null, 2));
-      process.exit(1);
-    }
+  .action(async (targetPath: string, options: { json?: boolean }) => {
+    const result = await analyzeApplication({ targetPath });
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
-    spinner?.succeed(chalk.green("Analysis completed successfully!"));
     console.log(chalk.bold.cyan("=== REVERSE IT: APPLICATION SUMMARY ==="));
     console.log(`Path: ${result.value.targetPath} | Modules: ${result.value.analyzedFiles}`);
   });
 
 program
   .command("inspect-native <file>")
-  .description("Inspect native binary (ELF, Mach-O, PE) headers, architecture, and sections")
+  .description("Inspect native binary (ELF, Mach-O, PE) headers and architecture")
   .option("--json", "Output raw JSON evidence")
   .action(async (file: string, options: { json?: boolean }) => {
     const result = await analyzeNativeBinary(file);
@@ -207,6 +169,43 @@ program
   });
 
 program
+  .command("inspect-manifest <axmlFile>")
+  .description("Decode binary AndroidManifest.xml string pool (permissions, activities)")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (axmlFile: string, options: { json?: boolean }) => {
+    const buf = await fs.readFile(axmlFile);
+    const result = decodeBinaryManifest(buf);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: DECODED MANIFEST ==="));
+    console.log(`Permissions: ${result.value.permissions.length} | Activities: ${result.value.activities.length}`);
+  });
+
+program
+  .command("inspect-wasm <file>")
+  .description("Inspect WebAssembly (.wasm) sections, imports, and exports")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeWasmModule(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: WEBASSEMBLY (WASM) ==="));
+    console.log(`Version: ${result.value.version} | Exports: ${result.value.exports.length}`);
+  });
+
+program
+  .command("inspect-evm <bytecode>")
+  .description("Recover 4-byte function dispatch selectors from EVM runtime bytecode")
+  .option("--json", "Output raw JSON evidence")
+  .action((bytecode: string, options: { json?: boolean }) => {
+    const result = analyzeEvmBytecode(bytecode);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: EVM DISPATCH SELECTORS ==="));
+    console.log(`Selectors: ${result.value.totalSelectors}`);
+  });
+
+program
   .command("inspect-firmware <file>")
   .description("Scan firmware binary image for partitions (SquashFS, U-Boot, DeviceTree, XZ)")
   .option("--json", "Output raw JSON evidence")
@@ -229,7 +228,7 @@ program
     if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
     console.log(chalk.bold.cyan("=== REVERSE IT: HAR CAPTURE ==="));
-    console.log(`Total Requests: ${result.value.totalRequests} across ${result.value.uniqueDomains.length} domains`);
+    console.log(`Total Requests: ${result.value.totalRequests}`);
   });
 
 program

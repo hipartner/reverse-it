@@ -26,6 +26,7 @@ import { disassembleTarget } from "../analysis/native/disassembly-bridge.js";
 import { decompileTarget } from "../analysis/native/decompiler-bridge.js";
 import { extractBinaryStrings } from "../analysis/native/strings-analyzer.js";
 import { analyzeApk } from "../analysis/mobile/apk-analyzer.js";
+import { analyzePackage } from "../analysis/packages/package-analyzer.js";
 import { analyzeFirmware } from "../analysis/firmware/firmware-analyzer.js";
 import { analyzeHarCapture } from "../analysis/network/har-analyzer.js";
 import { analyzeCoreDump } from "../analysis/diagnostics/crash-analyzer.js";
@@ -50,6 +51,16 @@ export async function runMcpServer() {
               targetPath: { type: "string", description: "Path to app directory." },
               maxFiles: { type: "number", description: "Max files to inspect." },
             },
+            required: ["targetPath"],
+          },
+        },
+        {
+          name: "inspect_package",
+          description:
+            "Inspect application package or installer (.deb, .rpm, .pkg, .msi, NSIS/Inno .exe installers, macOS .app bundles, PyInstaller).",
+          inputSchema: {
+            type: "object",
+            properties: { targetPath: { type: "string", description: "Path to package or installer file/bundle." } },
             required: ["targetPath"],
           },
         },
@@ -177,15 +188,18 @@ export async function runMcpServer() {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const filePath = String(args?.filePath ?? "");
+    const targetPath = String(args?.targetPath ?? filePath);
 
     switch (name) {
       case "analyze_javascript_application":
         return formatMcpResult(
           await analyzeApplication({
-            targetPath: String(args?.targetPath),
+            targetPath,
             maxFiles: args?.maxFiles ? Number(args.maxFiles) : undefined,
           })
         );
+      case "inspect_package":
+        return formatMcpResult(await analyzePackage(targetPath));
       case "decompile_target":
         return formatMcpResult(
           await decompileTarget(filePath, {

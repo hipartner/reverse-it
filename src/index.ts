@@ -26,6 +26,7 @@ export * from "./analysis/native/decompiler-bridge.js";
 export * from "./analysis/native/strings-analyzer.js";
 export * from "./analysis/mobile/apk-analyzer.js";
 export * from "./analysis/mobile/manifest-decoder.js";
+export * from "./analysis/packages/package-analyzer.js";
 export * from "./analysis/firmware/firmware-analyzer.js";
 export * from "./analysis/network/har-analyzer.js";
 export * from "./analysis/diagnostics/crash-analyzer.js";
