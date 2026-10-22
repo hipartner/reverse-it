@@ -20,6 +20,13 @@ import { analyzeModelArtifact } from "../analysis/models/model-analyzer.js";
 import { analyzeDotNetAssembly } from "../analysis/managed/dotnet-analyzer.js";
 import { analyzeUnityMetadata } from "../analysis/managed/unity-il2cpp.js";
 import { analyzeGodotPck } from "../analysis/managed/godot-pck.js";
+import { analyzeNativeBinary } from "../analysis/native/binary-format.js";
+import { disassembleTarget } from "../analysis/native/disassembly-bridge.js";
+import { extractBinaryStrings } from "../analysis/native/strings-analyzer.js";
+import { analyzeApk } from "../analysis/mobile/apk-analyzer.js";
+import { analyzeFirmware } from "../analysis/firmware/firmware-analyzer.js";
+import { analyzeHarCapture } from "../analysis/network/har-analyzer.js";
+import { analyzeCoreDump } from "../analysis/diagnostics/crash-analyzer.js";
 import { runMcpServer } from "../mcp/server.js";
 
 const program = new Command();
@@ -28,125 +35,75 @@ program
   .name("ri")
   .description(
     chalk.cyan(
-      "Reverse IT — Advanced static reverse-engineering for JavaScript, Electron, .NET, AI Models & Game Assets"
+      "Reverse IT — Advanced multi-domain reverse-engineering CLI & MCP server"
     )
   )
   .version("1.0.0");
 
-// Command: analyze
+// Command: analyze (JavaScript / Electron)
 program
   .command("analyze <path>")
   .description("Analyze an extracted JavaScript, Electron, or web application directory")
   .option("--json", "Output raw JSON evidence")
   .option("--max-files <number>", "Max number of files to inspect", "2000")
   .action(async (targetPath: string, options: { json?: boolean; maxFiles: string }) => {
-    const spinner = options.json
-      ? null
-      : ora(`Reverse IT analyzing target: ${chalk.bold(targetPath)}...`).start();
-
-    const maxFiles = parseInt(options.maxFiles, 10);
-    const result = await analyzeApplication({ targetPath, maxFiles });
-
+    const spinner = options.json ? null : ora(`Analyzing ${chalk.bold(targetPath)}...`).start();
+    const result = await analyzeApplication({ targetPath, maxFiles: parseInt(options.maxFiles, 10) });
     if (!result.ok) {
-      if (spinner) spinner.fail(chalk.red(`Analysis failed: ${result.error.message}`));
+      if (spinner) spinner.fail(chalk.red(result.error.message));
       else console.error(JSON.stringify(result.error, null, 2));
       process.exit(1);
     }
-
     if (options.json) {
       console.log(JSON.stringify(result.value, null, 2));
       return;
     }
-
     spinner?.succeed(chalk.green("Analysis completed successfully!"));
-
     const app = result.value;
     console.log();
     console.log(chalk.bold.cyan("=== REVERSE IT: APPLICATION SUMMARY ==="));
-    console.log(chalk.white(`Target Path      : `) + chalk.yellow(app.targetPath));
-    console.log(chalk.white(`Total Modules    : `) + chalk.green(app.analyzedFiles));
-    console.log(chalk.white(`Source Maps      : `) + chalk.green(app.sourceMapCount));
-
-    if (app.framework) {
-      console.log(chalk.white(`Framework        : `) + chalk.magenta(`${app.framework.name} (${app.framework.version ?? "unknown"})`));
-    }
-
+    console.log(`Path: ${app.targetPath} | Modules: ${app.analyzedFiles} | Maps: ${app.sourceMapCount}`);
     if (app.electron) {
-      console.log();
-      console.log(chalk.bold.yellow("--- Electron Architecture ---"));
-      if (app.electron.mainProcess) {
-        console.log(chalk.white(`Main Process     : `) + chalk.cyan(app.electron.mainProcess));
-      }
-      console.log(chalk.white(`IPC Channels     : `) + chalk.green(app.electron.ipcChannels.length));
-      console.log(chalk.white(`Browser Windows  : `) + chalk.green(app.electron.browserWindows.length));
-
-      if (app.electron.ipcChannels.length > 0) {
-        console.log();
-        console.log(chalk.bold("Top Discovered IPC Channels:"));
-        for (const channel of app.electron.ipcChannels.slice(0, 10)) {
-          console.log(`  • ${chalk.cyan(channel.name)} [${channel.direction}] (via ${channel.handler})`);
-        }
-      }
+      console.log(`IPC Channels: ${app.electron.ipcChannels.length} | Windows: ${app.electron.browserWindows.length}`);
     }
   });
 
-// Command: sourcemap
+// Command: inspect-native (ELF, Mach-O, PE)
 program
-  .command("sourcemap <file>")
-  .description("Inspect and unpack source map for a JavaScript file")
+  .command("inspect-native <file>")
+  .description("Inspect native binary (ELF, Mach-O, PE) headers, architecture, and sections")
   .option("--json", "Output raw JSON evidence")
   .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeSourceMap(file);
+    const result = await analyzeNativeBinary(file);
     if (!result.ok) {
-      console.error(chalk.red(`Source map analysis failed: ${result.error.message}`));
+      console.error(chalk.red(result.error.message));
       process.exit(1);
     }
     if (options.json) {
       console.log(JSON.stringify(result.value, null, 2));
       return;
     }
-    const sm = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: SOURCE MAP RECOVERY ==="));
-    console.log(`Target           : ${sm.targetFilePath}`);
-    console.log(`Recovered Files  : ${sm.originalSourcesCount}`);
-    for (const src of sm.sources.slice(0, 15)) {
-      console.log(`  • ${chalk.green(src.originalPath)} ${src.hasContent ? chalk.gray(`(${src.sizeBytes ?? 0} bytes)`) : chalk.red("(no embedded content)")}`);
+    const n = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: NATIVE BINARY ==="));
+    console.log(`Format   : ${chalk.yellow(n.format.toUpperCase())} (${n.bitness}-bit, ${n.endianness})`);
+    console.log(`Arch     : ${chalk.cyan(n.architecture)}`);
+    console.log(`Entry    : ${chalk.green(n.entryPoint)}`);
+    console.log(`Sections : ${chalk.green(n.sections.length)}`);
+    for (const s of n.sections.slice(0, 10)) {
+      console.log(`  • ${chalk.white(s.name.padEnd(20))} ${chalk.gray(s.virtualAddress)} (${s.sizeBytes} bytes)`);
     }
   });
 
-// Command: inspect-model
+// Command: disassemble
 program
-  .command("inspect-model <file>")
-  .description("Inspect AI model artifact (GGUF / Safetensors) metadata and tensors")
+  .command("disassemble <file>")
+  .description("Disassemble binary routine using host objdump without execution")
+  .option("--function <name>", "Specific function routine")
   .option("--json", "Output raw JSON evidence")
-  .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeModelArtifact(file);
+  .action(async (file: string, options: { function?: string; json?: boolean }) => {
+    const result = await disassembleTarget(file, { functionName: options.function });
     if (!result.ok) {
-      console.error(chalk.red(`Model inspection failed: ${result.error.message}`));
-      process.exit(1);
-    }
-    if (options.json) {
-      console.log(JSON.stringify(result.value, null, 2));
-      return;
-    }
-    const m = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: MODEL ARTIFACT ==="));
-    console.log(chalk.white("Format       : ") + chalk.yellow(m.format.toUpperCase()));
-    console.log(chalk.white("Tensors      : ") + chalk.green(m.tensorCount));
-    if (m.architecture) console.log(chalk.white("Architecture : ") + chalk.cyan(m.architecture));
-    if (m.quantization) console.log(chalk.white("Quantization : ") + chalk.magenta(m.quantization));
-    if (m.contextLength) console.log(chalk.white("Context Len  : ") + chalk.green(m.contextLength));
-  });
-
-// Command: inspect-dotnet
-program
-  .command("inspect-dotnet <file>")
-  .description("Inspect .NET PE Assembly for CIL headers and target framework")
-  .option("--json", "Output raw JSON evidence")
-  .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeDotNetAssembly(file);
-    if (!result.ok) {
-      console.error(chalk.red(`DotNet inspection failed: ${result.error.message}`));
+      console.error(chalk.red(result.error.message));
       process.exit(1);
     }
     if (options.json) {
@@ -154,62 +111,161 @@ program
       return;
     }
     const d = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: DISASSEMBLY ==="));
+    for (const fn of d.functions) {
+      console.log(chalk.yellow(`<${fn.name}> (${fn.address}):`));
+      for (const ins of fn.instructions) {
+        console.log(`  ${chalk.gray(ins.address)}  ${chalk.cyan(ins.mnemonic.padEnd(8))} ${ins.operands}`);
+      }
+    }
+  });
+
+// Command: strings
+program
+  .command("strings <file>")
+  .description("Extract and classify URLs, IPs, file paths, and ASCII/UTF-8 strings")
+  .option("--min-length <n>", "Minimum string length", "4")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { minLength: string; json?: boolean }) => {
+    const result = await extractBinaryStrings(file, { minLength: parseInt(options.minLength, 10) });
+    if (!result.ok) {
+      console.error(chalk.red(result.error.message));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    console.log(chalk.bold.cyan("=== REVERSE IT: EXTRACTED STRINGS ==="));
+    for (const s of result.value.interestingStrings.slice(0, 30)) {
+      console.log(`[${chalk.magenta(s.classification ?? "str")}] ${chalk.green(s.value)}`);
+    }
+  });
+
+// Command: inspect-apk
+program
+  .command("inspect-apk <file>")
+  .description("Inspect Android APK package for Dex files, native ABIs, and manifest")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeApk(file);
+    if (!result.ok) {
+      console.error(chalk.red(result.error.message));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const a = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: ANDROID APK ==="));
+    console.log(`DEX Files : ${chalk.green(a.dexFiles.length)} (${a.dexFiles.join(", ")})`);
+    console.log(`Native ABI: ${chalk.yellow(Object.keys(a.nativeLibraries).join(", ") || "None")}`);
+    console.log(`Manifest  : ${a.hasManifest ? chalk.green("Found") : chalk.red("Missing")}`);
+  });
+
+// Command: inspect-firmware
+program
+  .command("inspect-firmware <file>")
+  .description("Scan firmware binary image for partitions (SquashFS, U-Boot, DeviceTree, XZ)")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeFirmware(file);
+    if (!result.ok) {
+      console.error(chalk.red(result.error.message));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    console.log(chalk.bold.cyan("=== REVERSE IT: FIRMWARE PARTITIONS ==="));
+    for (const sig of result.value.signatures) {
+      console.log(`  • 0x${sig.offset.toString(16).padEnd(8)} [${chalk.yellow(sig.type)}] ${sig.description}`);
+    }
+  });
+
+// Command: inspect-har
+program
+  .command("inspect-har <file>")
+  .description("Inspect HTTP Archive (.har) capture for endpoints and auth headers")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeHarCapture(file);
+    if (!result.ok) {
+      console.error(chalk.red(result.error.message));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const h = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: HAR CAPTURE ==="));
+    console.log(`Total Requests: ${chalk.green(h.totalRequests)} across ${chalk.yellow(h.uniqueDomains.length)} domains`);
+    for (const req of h.requests.slice(0, 15)) {
+      console.log(`  ${chalk.cyan(req.method)} ${chalk.white(req.status)} ${req.url} ${req.hasAuthHeader ? chalk.red("[AUTH]") : ""}`);
+    }
+  });
+
+// Command: inspect-crash
+program
+  .command("inspect-crash <file>")
+  .description("Inspect Linux ELF core dump for crash architecture and program segments")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeCoreDump(file);
+    if (!result.ok) {
+      console.error(chalk.red(result.error.message));
+      process.exit(1);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(result.value, null, 2));
+      return;
+    }
+    const c = result.value;
+    console.log(chalk.bold.cyan("=== REVERSE IT: CORE DUMP ==="));
+    console.log(`Architecture: ${chalk.cyan(c.architecture)} (${c.bitness}-bit)`);
+    console.log(`Segments    : ${chalk.green(c.programHeadersCount)}`);
+  });
+
+// Existing commands: inspect-model, inspect-dotnet, inspect-unity, inspect-pck, sourcemap, mcp
+program
+  .command("inspect-model <file>")
+  .description("Inspect AI model artifact (GGUF / Safetensors) metadata and tensors")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeModelArtifact(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: MODEL ARTIFACT ==="));
+    console.log(`Format: ${result.value.format} | Tensors: ${result.value.tensorCount}`);
+  });
+
+program
+  .command("inspect-dotnet <file>")
+  .description("Inspect .NET PE Assembly for CIL headers and target framework")
+  .option("--json", "Output raw JSON evidence")
+  .action(async (file: string, options: { json?: boolean }) => {
+    const result = await analyzeDotNetAssembly(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
     console.log(chalk.bold.cyan("=== REVERSE IT: .NET ASSEMBLY ==="));
-    console.log(chalk.white("Managed CIL  : ") + (d.isManagedAssembly ? chalk.green("YES") : chalk.red("NO (Native PE)")));
-    console.log(chalk.white("Machine      : ") + chalk.yellow(d.peMachine));
-    if (d.targetFrameworkVersion) {
-      console.log(chalk.white("Framework    : ") + chalk.cyan(d.targetFrameworkVersion));
-    }
-    if (d.cliHeader) {
-      console.log(chalk.white("IL Only      : ") + (d.cliHeader.isIlOnly ? chalk.green("true") : chalk.gray("false")));
-      console.log(chalk.white("Entry Token  : ") + chalk.yellow(d.cliHeader.entryPointToken));
-    }
+    console.log(`Managed CIL: ${result.value.isManagedAssembly} | Machine: ${result.value.peMachine}`);
   });
 
-// Command: inspect-unity
 program
-  .command("inspect-unity <file>")
-  .description("Inspect Unity global-metadata.dat (IL2CPP) method and type tables")
+  .command("sourcemap <file>")
+  .description("Inspect and unpack source map for a JavaScript file")
   .option("--json", "Output raw JSON evidence")
   .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeUnityMetadata(file);
-    if (!result.ok) {
-      console.error(chalk.red(`Unity metadata inspection failed: ${result.error.message}`));
-      process.exit(1);
-    }
-    if (options.json) {
-      console.log(JSON.stringify(result.value, null, 2));
-      return;
-    }
-    const u = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: UNITY IL2CPP METADATA ==="));
-    console.log(chalk.white("Metadata Ver : ") + chalk.yellow(u.version));
-    console.log(chalk.white("Types Count  : ") + chalk.green(u.typeDefinitionsCount));
-    console.log(chalk.white("Methods Count: ") + chalk.green(u.methodDefinitionsCount));
+    const result = await analyzeSourceMap(file);
+    if (!result.ok) { console.error(chalk.red(result.error.message)); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(result.value, null, 2)); return; }
+    console.log(chalk.bold.cyan("=== REVERSE IT: SOURCE MAP RECOVERY ==="));
+    console.log(`Recovered Files: ${result.value.originalSourcesCount}`);
   });
 
-// Command: inspect-pck
-program
-  .command("inspect-pck <file>")
-  .description("Inspect Godot Engine .pck package archive")
-  .option("--json", "Output raw JSON evidence")
-  .action(async (file: string, options: { json?: boolean }) => {
-    const result = await analyzeGodotPck(file);
-    if (!result.ok) {
-      console.error(chalk.red(`Godot PCK inspection failed: ${result.error.message}`));
-      process.exit(1);
-    }
-    if (options.json) {
-      console.log(JSON.stringify(result.value, null, 2));
-      return;
-    }
-    const g = result.value;
-    console.log(chalk.bold.cyan("=== REVERSE IT: GODOT PCK ==="));
-    console.log(chalk.white("Format Ver   : ") + chalk.yellow(g.formatVersion));
-    console.log(chalk.white("Engine Ver   : ") + chalk.cyan(g.engineVersion));
-  });
-
-// Command: mcp
 program
   .command("mcp")
   .description("Start the Reverse IT Model Context Protocol (MCP) server over stdio")

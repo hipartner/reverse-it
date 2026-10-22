@@ -23,6 +23,13 @@ import { analyzeModelArtifact } from "../analysis/models/model-analyzer.js";
 import { analyzeDotNetAssembly } from "../analysis/managed/dotnet-analyzer.js";
 import { analyzeUnityMetadata } from "../analysis/managed/unity-il2cpp.js";
 import { analyzeGodotPck } from "../analysis/managed/godot-pck.js";
+import { analyzeNativeBinary } from "../analysis/native/binary-format.js";
+import { disassembleTarget } from "../analysis/native/disassembly-bridge.js";
+import { extractBinaryStrings } from "../analysis/native/strings-analyzer.js";
+import { analyzeApk } from "../analysis/mobile/apk-analyzer.js";
+import { analyzeFirmware } from "../analysis/firmware/firmware-analyzer.js";
+import { analyzeHarCapture } from "../analysis/network/har-analyzer.js";
+import { analyzeCoreDump } from "../analysis/diagnostics/crash-analyzer.js";
 
 export async function runMcpServer() {
   const server = new Server(
@@ -47,14 +54,8 @@ export async function runMcpServer() {
           inputSchema: {
             type: "object",
             properties: {
-              targetPath: {
-                type: "string",
-                description: "Absolute path to the extracted application directory.",
-              },
-              maxFiles: {
-                type: "number",
-                description: "Maximum number of files to inspect (default: 2000).",
-              },
+              targetPath: { type: "string", description: "Absolute path to the extracted application directory." },
+              maxFiles: { type: "number", description: "Maximum number of files to inspect (default: 2000)." },
             },
             required: ["targetPath"],
           },
@@ -66,10 +67,7 @@ export async function runMcpServer() {
           inputSchema: {
             type: "object",
             properties: {
-              filePath: {
-                type: "string",
-                description: "Absolute path to the JavaScript file or .map file.",
-              },
+              filePath: { type: "string", description: "Absolute path to the JavaScript file or .map file." },
             },
             required: ["filePath"],
           },
@@ -77,14 +75,11 @@ export async function runMcpServer() {
         {
           name: "inspect_model_artifact",
           description:
-            "Inspect an AI model artifact (GGUF or Safetensors). Returns tensor counts, quantization, architecture, context length, and metadata without loading weights into RAM.",
+            "Inspect an AI model artifact (GGUF or Safetensors) without loading weights into RAM.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: {
-                type: "string",
-                description: "Absolute path to the .gguf or .safetensors model file.",
-              },
+              filePath: { type: "string", description: "Absolute path to the model file." },
             },
             required: ["filePath"],
           },
@@ -92,36 +87,99 @@ export async function runMcpServer() {
         {
           name: "inspect_managed_artifact",
           description:
-            "Inspect a .NET assembly (.dll / .exe) for CLI headers, target framework version, flags, and metadata streams without executing code.",
+            "Inspect a .NET assembly (.dll / .exe) for CLI headers, target framework version, and metadata streams.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: {
-                type: "string",
-                description: "Absolute path to the .NET PE assembly file.",
-              },
+              filePath: { type: "string", description: "Absolute path to the .NET PE assembly." },
             },
             required: ["filePath"],
           },
         },
         {
-          name: "inspect_game_metadata",
+          name: "inspect_native_binary",
           description:
-            "Inspect game engine metadata: Unity global-metadata.dat (IL2CPP) or Godot .pck packages.",
+            "Inspect ELF, Mach-O, or PE native binary anatomy, architecture, bitness, entry point, and section map.",
           inputSchema: {
             type: "object",
             properties: {
-              filePath: {
-                type: "string",
-                description: "Absolute path to global-metadata.dat or .pck file.",
-              },
-              engine: {
-                type: "string",
-                enum: ["unity", "godot"],
-                description: "Game engine format to parse.",
-              },
+              filePath: { type: "string", description: "Absolute path to the binary executable or shared library." },
             },
-            required: ["filePath", "engine"],
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "disassemble_target",
+          description:
+            "Disassemble specified function routines or address ranges using host objdump without executing the binary.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the native binary." },
+              functionName: { type: "string", description: "Specific symbol or function to disassemble." },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "extract_binary_strings",
+          description:
+            "Extract and classify printable ASCII/UTF-8 strings (URLs, file paths, IPs, GUIDs) from any binary.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the target binary." },
+              minLength: { type: "number", description: "Minimum string length (default: 4)." },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "analyze_apk",
+          description:
+            "Inspect an Android APK package for Dex bytecode files, native libraries per ABI, and AndroidManifest.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the .apk file." },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "analyze_firmware",
+          description:
+            "Scan a firmware binary image for partitions (SquashFS, U-Boot, DeviceTree, compressed archives).",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the firmware binary image." },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "analyze_har_capture",
+          description:
+            "Inspect an HTTP Archive (.har) capture for requests, responses, authorization headers, and API domains.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the .har file." },
+            },
+            required: ["filePath"],
+          },
+        },
+        {
+          name: "analyze_core_dump",
+          description:
+            "Inspect a Linux ELF core dump for architecture, signal numbers, and memory segments.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              filePath: { type: "string", description: "Absolute path to the core dump file." },
+            },
+            required: ["filePath"],
           },
         },
       ],
@@ -130,46 +188,47 @@ export async function runMcpServer() {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const filePath = String(args?.filePath ?? "");
 
-    if (name === "analyze_javascript_application") {
-      const targetPath = String(args?.targetPath);
-      const maxFiles = args?.maxFiles ? Number(args.maxFiles) : undefined;
-      const result = await analyzeApplication({ targetPath, maxFiles });
-      return formatMcpResult(result);
+    switch (name) {
+      case "analyze_javascript_application":
+        return formatMcpResult(
+          await analyzeApplication({
+            targetPath: String(args?.targetPath),
+            maxFiles: args?.maxFiles ? Number(args.maxFiles) : undefined,
+          })
+        );
+      case "inspect_sourcemap":
+        return formatMcpResult(await analyzeSourceMap(filePath));
+      case "inspect_model_artifact":
+        return formatMcpResult(await analyzeModelArtifact(filePath));
+      case "inspect_managed_artifact":
+        return formatMcpResult(await analyzeDotNetAssembly(filePath));
+      case "inspect_native_binary":
+        return formatMcpResult(await analyzeNativeBinary(filePath));
+      case "disassemble_target":
+        return formatMcpResult(
+          await disassembleTarget(filePath, {
+            functionName: args?.functionName ? String(args.functionName) : undefined,
+          })
+        );
+      case "extract_binary_strings":
+        return formatMcpResult(
+          await extractBinaryStrings(filePath, {
+            minLength: args?.minLength ? Number(args.minLength) : undefined,
+          })
+        );
+      case "analyze_apk":
+        return formatMcpResult(await analyzeApk(filePath));
+      case "analyze_firmware":
+        return formatMcpResult(await analyzeFirmware(filePath));
+      case "analyze_har_capture":
+        return formatMcpResult(await analyzeHarCapture(filePath));
+      case "analyze_core_dump":
+        return formatMcpResult(await analyzeCoreDump(filePath));
+      default:
+        throw new Error(`Unknown tool: ${name}`);
     }
-
-    if (name === "inspect_sourcemap") {
-      const filePath = String(args?.filePath);
-      const result = await analyzeSourceMap(filePath);
-      return formatMcpResult(result);
-    }
-
-    if (name === "inspect_model_artifact") {
-      const filePath = String(args?.filePath);
-      const result = await analyzeModelArtifact(filePath);
-      return formatMcpResult(result);
-    }
-
-    if (name === "inspect_managed_artifact") {
-      const filePath = String(args?.filePath);
-      const result = await analyzeDotNetAssembly(filePath);
-      return formatMcpResult(result);
-    }
-
-    if (name === "inspect_game_metadata") {
-      const filePath = String(args?.filePath);
-      const engine = String(args?.engine);
-
-      if (engine === "unity") {
-        const result = await analyzeUnityMetadata(filePath);
-        return formatMcpResult(result);
-      } else if (engine === "godot") {
-        const result = await analyzeGodotPck(filePath);
-        return formatMcpResult(result);
-      }
-    }
-
-    throw new Error(`Unknown tool: ${name}`);
   });
 
   const transport = new StdioServerTransport();
@@ -179,22 +238,12 @@ export async function runMcpServer() {
 function formatMcpResult(result: { ok: boolean; value?: unknown; error?: { message: string } }) {
   if (result.ok) {
     return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result.value, null, 2),
-        },
-      ],
+      content: [{ type: "text" as const, text: JSON.stringify(result.value, null, 2) }],
     };
   } else {
     return {
       isError: true,
-      content: [
-        {
-          type: "text" as const,
-          text: `Operation failed: ${result.error?.message ?? "Unknown error"}`,
-        },
-      ],
+      content: [{ type: "text" as const, text: `Operation failed: ${result.error?.message ?? "Unknown error"}` }],
     };
   }
 }
