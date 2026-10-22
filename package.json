@@ -1,0 +1,76 @@
+{
+  "name": "ri-agents",
+  "version": "1.0.0",
+  "description": "Reverse engineer JavaScript, Electron, and web applications from your terminal or AI agent with one CLI and MCP server.",
+  "license": "MIT",
+  "author": {
+    "name": "R Kiran Kumar",
+    "url": "https://sadafiles.com/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hipartner/reverse-it.git"
+  },
+  "homepage": "https://sadafiles.com/",
+  "bugs": {
+    "url": "https://github.com/hipartner/reverse-it/issues"
+  },
+  "keywords": [
+    "reverse-engineering",
+    "javascript-analysis",
+    "electron",
+    "cli",
+    "mcp-server",
+    "model-context-protocol",
+    "static-analysis",
+    "reverse-it",
+    "source-maps",
+    "ipc-analysis"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "ri": "./dist/cli/main.js",
+    "reverse-it": "./dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "dev": "tsx src/cli/main.ts",
+    "start:mcp": "tsx src/mcp/server.ts",
+    "lint": "eslint src/",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "clean": "rm -rf dist/",
+    "prepublishOnly": "npm run clean && npm run build",
+    "website:dev": "cd website && npm run dev",
+    "website:build": "cd website && npm run build"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "acorn": "^8.14.1",
+    "acorn-walk": "^8.3.4",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "glob": "^11.0.1",
+    "ora": "^8.2.0",
+    "source-map": "^0.7.4",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "eslint": "^9.25.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}
